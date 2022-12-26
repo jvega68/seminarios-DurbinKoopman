@@ -1,0 +1,325 @@
+---
+title: "Durbin & Koopman"
+author: "Jorge de la Vega"
+date: "2022-12-13"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Capìtulo 2
+
+Los valores de las varianzas deben ser estimados, pero para efectos de la reproducibilidad de los ejercicios de recursiones del filtro de Kalman, aquì se consideran como dados.
+
+```{r llm}
+llm <- function(y,a,P,sigma2_eps,sigma2_eta){
+# Estimación del modelo lineal local vía recursiones 
+# del filtro de Kalman.
+# Tambièn estima el suavizamiento del estado. 
+  
+TT <- length(y)
+att  <- Ptt <- K <- F_ <- v <- alfahat <- r <- L <- V <- N <- epshat <- etahat <- Varepshat <- Varetahat <- u <- D <- NULL
+
+# ìndices de casos faltantes
+m <- which(is.na(y))
+
+# Recursiones:
+for(i in 1:TT){
+  F_[i] <- P[i] + sigma2_eps
+  K[i] <- ifelse(i %in% m, 0,P[i]/F_[i])
+  v[i] <- y[i] - a[i]
+  att[i] <- a[i] + ifelse(i %in% m, 0, K[i]*v[i])
+  Ptt[i] <- P[i]*(1 - K[i])
+  a[i+1] <- a[i] + ifelse(i %in% m, 0, K[i]*v[i])
+  P[i+1] <- P[i]*(1 - K[i]) + sigma2_eta  
+}
+  
+# Parte para el suavizamiento del estado. Esta parte es recursiva inversa
+  
+r[TT] <- N[TT] <- 0 # valores iniciales
+for(i in TT:1){
+  L[i] <- 1- K[i]
+  if(i>=2) r[i-1] <- v[i]/F_[i] + L[i]*ifelse(is.na(r[i]),0,r[i])
+  if(i>=2) N[i-1] = 1/F_[i] + L[i]^2*N[i]
+  alfahat[i] <- a[i] + P[i]*ifelse(i == 1, NA, r[i-1])
+  V[i] <- P[i] -P[i]^2*ifelse(i == 1, NA, N[i-1])
+}
+
+
+# Suavizamiento de las perturbaciones
+
+for(i in TT:1){
+  u[i] <- v[i]/F_[i] - K[i]*r[i]
+  epshat[i] <- sigma2_eps*u[i]
+  D[i] <- 1/F_[i] + K[i]^2*N[i]
+  Varepshat[i] <- sigma2_eps - sigma2_eps^2*D[i]
+  etahat[i] <- sigma2_eta*r[i]
+  Varetahat[i] <- sigma2_eta - sigma2_eta^2*N[i]
+}
+
+return(data.frame(  y = c(y,NA),
+                    att = c(att,NA),
+                      a = a,
+                      v = c(v,NA),
+                    Ptt = c(Ptt,NA),
+                      P = P,
+                      K = c(K, NA), 
+                      alfahat = c(NA,alfahat),
+                      L = c(NA, L),
+                      N = c(NA, N),
+                      V = c(NA, V),
+                      r = c(NA, r),
+                      F_ = c(NA,F_),
+                      u = c(NA,u),
+                    epshat = c(NA,epshat),
+                    Varepshat = c(NA,Varepshat),
+                    etahat = c(NA,etahat),
+                    Varetahat = c(NA,Varetahat)
+                    ))
+
+  
+}
+```
+
+
+```{r}
+y <- datasets::Nile
+a <- llm(y, a = 0, P = 10e7, sigma2_eps = 15099, sigma2_eta = 1469.1)
+```
+
+Gráficas y comparaciones. 
+
+```{r}
+par(mfrow = c(1,2))
+plot(a$y)
+a$a[1] <- NA
+lines(a$a, lwd = 2)
+lines(a$a - 1.65*sqrt(a$P), col = "red", lty=3, lwd = 2)
+lines(a$a + 1.65*sqrt(a$P), col = "red", lty=3, lwd = 2)
+lines(a$alfahat, lwd = 2, col = "blue")
+
+plot(a$v, type = "l")
+abline(h=0)
+```
+
+
+También podemos utilizar funciones ya predefinidas
+
+```{r}
+struct <- StructTS(y, type = "level")
+if (struct$code != 0) stop("optimizer did not converge")
+print(struct$coef)
+
+lines(struct$fitted, col  = "red", lwd = 5)
+```
+
+# Script 3
+```{r}
+# Ejemplos de modelo lineal local para el cursillo sobre
+# modelos de espacio de estado
+
+# Continuamos con el ejemplo de datos del Nilo. La sesión anterior
+# calculamos el filtro, ahora calcularemos el estado suavizado, su
+# varianza estimada e intervalos de confianza.
+
+#Lee el conjunto de datos, saltando la primera linea del archivo
+#Adicionalmente, convierte la serie de datos en una serie de tiempo
+
+nilo <- ts(scan("data/nile.dat",skip=1),start=1874,freq=1)
+
+# Genera la gráfica con las características deseadas
+plot(nilo, type = "o", 
+     main = "Flujo anual en volumen", 
+     xlab = "Año",
+     ylab = "vol")
+
+# agrega líneas verticales a los datos para separar décadas
+abline(v = seq(1880, 1970,by = 10),col = "gray", lty = 3)
+# Calcula el modelo estructural de nivel local
+nilo.fit <- StructTS(nilo, type = "level")  
+names(nilo.fit)
+  
+lines(fitted(nilo.fit), lty = 2, col = "red")
+# Gráfica de las inovaciones o errores de predicción vt 
+plot(nilo.fit$data - nilo.fit$fitted, 
+     main = "Errores de predicción o inovaciones", 
+     xlab = "Año",
+     ylab = expression(nu[t]))
+abline(h=0)
+
+# A partir de las estimaciones y utilizando las ecuaciones para
+# los diferentes componentes, podemos obtener el resto de las cantidades
+
+# Función para Calcula las recursiones
+RecKalman <-function(datos){
+  modelo <- StructTS(datos, type="level")
+  n <- length(modelo$data)
+  Ft <- NULL
+  Pt <- NULL
+  at <- NULL
+  Kt <- NULL
+  v2t <-NULL
+  vt <- modelo$data-modelo$fitted
+  Pt[1] <- modelo$model0$P
+  at[1] <- modelo$data[1]
+  s2eps <- modelo$coef[2]
+  s2eta <- modelo$coef[1]
+  for(i in 1:n){
+    v2t[i] <- modelo$data[i] - at[i]
+    Ft[i] <- Pt[i]+s2eps
+    Kt[i] <- Pt[i]/Ft[i]
+    at[i+1] <- at[i]+ Kt[i]*v2t[i]
+    Pt[i+1] <- Pt[i]*(1-Kt[i]) + s2eta
+  }
+  #Recursiones para suavizamiento:
+  rt <- NULL
+  Nt <- NULL
+  Dt <- NULL
+  Lt <- 1-Kt
+  rt[n] <- 0
+  Nt[n] <- 0
+  alfahatt <- NULL
+  var.alfat <- NULL
+  for(i in n:2){
+    rt[i-1] <- v2t[i]/Ft[i]+Lt[i]*rt[i]
+    Nt[i-1] <- 1/Ft[i]+Lt[i]^2*Nt[i]
+    alfahatt[i] <- at[i]+Pt[i]*rt[i-1]
+    var.alfat[i] <- Pt[i]-Pt[i]^2*Nt[i-1]
+  }
+  r0 <- vt[1]/Ft[1]+Lt[1]*rt[1]
+  N0 <- 1/Ft[1]+Lt[1]^2*Nt[1]
+  alfahatt[1] <- at[1]+Pt[1]*r0
+  var.alfat[1] <- Pt[1]-Pt[1]^2*N0
+  return(list(rec = cbind(v2t=v2t,
+                          Ft=Ft,
+                          Kt=Kt,
+                          at=at[-1],
+                          Pt=Pt[1:n],
+                          fitted=modelo$fitted,
+                          vt=vt,
+                          Lt=Lt,
+                          Nt=Nt,
+                          rt=rt,
+                          alfahat=alfahatt,var.alfat=var.alfat),
+              errores = cbind(Dt=1/Ft+Kt^2*Nt,epshat=s2eps*vt/Ft-Kt*rt,
+                              vareps=s2eps-s2eps^2*(1/Ft+Kt^2*Nt),etahat=s2eta*rt,
+                              vareta=s2eta-s2eta^2*Nt),
+         init = c(r0=r0,N0=N0,sigma2eps= s2eps,sigma2eta=s2eta)))
+              
+}
+
+A <- RecKalman(nilo)
+```
+
+
+2.6 Simulación
+
+Simulación no condicional
+
+```{r}
+# Graficar el nivel
+alfap <- vector(mode = "numeric", length = 101)
+alfap[1] <- 1100 # valor inicial
+sigma_eta = sqrt(1469.1)
+set.seed(56) # fija semilla aleatoria para generar muestra de errores. 
+etap <- rnorm(100, sd = sigma_eta)
+
+for (i in 1:101){
+ alfap[i+1] <- alfap[i] + etap[i]  
+}
+plot(alfap, ylim = c(800,1400))
+lines(a$alfahat, col = "red")
+```
+
+La simulación condicional es un poco más elaborada, y creo que le falta explicación en el documento. 
+
+```{r}
+sigma_eta <- sqrt(1469.1)
+sigma_eps <- sqrt(15099)
+n <- 100
+epshat <- yp <- numeric(n)
+set.seed(56) # fija semilla aleatoria para generar muestra de errores. 
+etap <- rnorm(n, sd = sigma_eta)
+epsp <- rnorm(n, sd = sigma_eps)
+B <- as.data.frame(A$rec)
+for (i in 2:(n+1)){
+ yp[i] <- alfap[i] + epsp[i] 
+ alfap[i+1] <- alfap[i] + etap[i]
+ epshat[i] <- sigma_eta^2*(B$vt[i]/B$Ft[i]-B$Kt[i]*B$rt[i])
+}
+ap <- llm(yp[-101], a = 0, P = 10e7, sigma2_eps = 15099, sigma2_eta = 1469.1)
+vt <- yp - a$y
+epshatp <- sigma_eta^2*(vt/ap$F_ - ap$K*ap$r)
+
+epstilde <- c(epsp,NA) - epshatp + epshat
+alfatilde <- a$y - epstilde
+etatilde <- diff(alfatilde)
+plot(alfatilde,type = "l", col = "red")
+lines(a$alfahat, type = "l")
+```
+
+
+## 2.7 Datos faltantes
+
+
+Para los datos faltantes, se considerarán las estimaciones obtenidas previamente, y se ajustarán de acuerdo a las recursiones establecidas-
+
+```{r}
+y <- datasets::Nile
+y[c(21:40,61:80)] <- NA
+a <- llm(y, a = 0, P = 10e7, sigma2_eps = 15099, sigma2_eta = 1469.1)
+plot(y, type = "l")
+lines(1871:1971,a$a)
+# Gráfica del suavizado
+plot(y, type = "l")
+lines(1871:1971,a$alfahat)
+```
+
+Versión considerando la estimación de los parámetros (lo que puede dar un resultado distinto al del libro)
+```{r}
+library(statespacer)
+y <- Nile
+y[c(21:40,61:80)] <- NA  # introduce los valores faltantes
+y <- matrix(y)           # requiere que se consideren matrices en los inputs
+m1 <- statespacer(y = y, local_level_ind = T, initial = 0.5*log(var(y,na.rm=T)))
+par(mfrow=c(2,2))
+plot(y, type = "l")
+lines(m1$filtered$a)
+plot(m1$filtered$P, type = "o", cex = 0.5)
+plot(y, type = "l")
+lines(m1$smoothed$a)
+plot(m1$smoothed$V, type ="o", cex = 0.5)
+```
+
+# Pronóstico
+
+```{r}
+par(mfrow=c(1,2))
+# Pronóstico
+y <- matrix(as.vector(Nile))
+m1 <- statespacer(y = y, local_level_ind = T, initial = 0.5*log(var(y,na.rm=T)))
+h <- predict(m1, forecast_period = 30)
+ypred <- c(Nile,h$y_fc)
+plot(c(Nile,rep(NA,30)), ylab = "", xlab = "")
+lines(c(m1$filtered$a,h$a_fc))
+lines(c(rep(NA,100), as.vector(h$y_fc + qnorm(.25,lower.tail = F)*as.vector(sqrt(h$Fmat_fc)))))
+lines(c(rep(NA,100), as.vector(h$y_fc - qnorm(.25,lower.tail = F)*as.vector(sqrt(h$Fmat_fc)))))
+```
+
+```{r}
+y <- Nile
+y <- matrix(y)           # requiere que se consideren matrices en los inputs
+m1 <- statespacer(y = y, local_level_ind = T, initial = 0.5*log(var(y,na.rm=T)))
+par(mfrow=c(1,3))
+plot(as.vector(m1$diagnostics$v_normalised),type="l", 
+     main = "error de predicción estandarizado",ylab = "e")
+plot(as.vector(m1$diagnostics$e)/sqrt(as.vector(m1$diagnostics$D)),type="l",
+     main = "residual de la observacion u_t", ylab = "u_t")
+plot(as.vector(m1$diagnostics$r)/sqrt(as.vector(m1$diagnostics$N)),type="l",
+     main = "residual de la observacion r_t", ylab = "r_t")
+```
+
